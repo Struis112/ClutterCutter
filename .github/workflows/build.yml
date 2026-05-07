@@ -31,20 +31,21 @@ jobs:
             -reference:System.dll `
             -reference:System.Core.dll `
             -reference:Microsoft.VisualBasic.dll `
-            -out:TreeSizeLite.exe `
-            TreeSizeLite.cs
+            -win32icon:ClutterCutter.ico `
+            -out:ClutterCutter.exe `
+            ClutterCutter.cs
           if ($LASTEXITCODE -ne 0) { throw "csc.exe exited with $LASTEXITCODE" }
-          if (-not (Test-Path TreeSizeLite.exe)) { throw "TreeSizeLite.exe was not produced" }
-          $size = (Get-Item TreeSizeLite.exe).Length
-          Write-Host "Built TreeSizeLite.exe ($size bytes)"
+          if (-not (Test-Path ClutterCutter.exe)) { throw "ClutterCutter.exe was not produced" }
+          $size = (Get-Item ClutterCutter.exe).Length
+          Write-Host "Built ClutterCutter.exe ($size bytes)"
 
       - name: Smoke test (process starts)
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath ".\TreeSizeLite.exe" -PassThru
+          $p = Start-Process -FilePath ".\ClutterCutter.exe" -PassThru
           Start-Sleep -Seconds 3
           if ($p.HasExited) {
-            throw "TreeSizeLite.exe exited immediately with code $($p.ExitCode)"
+            throw "ClutterCutter.exe exited immediately with code $($p.ExitCode)"
           }
           Write-Host "Process running: PID=$($p.Id) Title='$($p.MainWindowTitle)'"
           Stop-Process -Id $p.Id -Force
@@ -52,13 +53,13 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TreeSizeLite-${{ github.sha }}
-          path: TreeSizeLite.exe
+          name: ClutterCutter-${{ github.sha }}
+          path: ClutterCutter.exe
           retention-days: 30
 
       - name: Attach to GitHub Release on tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: TreeSizeLite.exe
+          files: ClutterCutter.exe
           fail_on_unmatched_files: true

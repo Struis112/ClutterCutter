@@ -1,4 +1,4 @@
-# ClutterCutter (TreeSize Lite)
+# ClutterCutter
 
 A lightweight Windows disk-usage browser built and maintained by **Struis ICT**.
 
@@ -18,7 +18,7 @@ Single-file native `.exe` (~70 KB), no installer, no dependencies beyond the .NE
 
 ## Download
 
-Pre-built binaries are attached to each [GitHub Release](https://github.com/Struis112/ClutterCutter/releases). Just download `TreeSizeLite.exe` and run it — it's a single self-contained file.
+Pre-built binaries are attached to each [GitHub Release](https://github.com/Struis112/ClutterCutter/releases). Just download `ClutterCutter.exe` and run it — it's a single self-contained file.
 
 ## Building from source
 
@@ -32,8 +32,9 @@ You only need a Windows machine. The .NET Framework 4 C# compiler ships with Win
     -reference:System.dll `
     -reference:System.Core.dll `
     -reference:Microsoft.VisualBasic.dll `
-    -out:TreeSizeLite.exe `
-    TreeSizeLite.cs
+    -win32icon:ClutterCutter.ico `
+    -out:ClutterCutter.exe `
+    ClutterCutter.cs
 ```
 
 GitHub Actions reproduces this same build on every push (`.github/workflows/build.yml`).
@@ -54,7 +55,7 @@ When MFT mode is active, hard-linked files (which `WinSxS` uses heavily) are cou
 
 ## Repo
 
-Pushed and maintained at [Struis112/ClutterCutter](https://github.com/Struis112/ClutterCutter). The binary file inside is named `TreeSizeLite.exe` for now; the project (and the eventual product name) is **ClutterCutter**.
+Pushed and maintained at [Struis112/ClutterCutter](https://github.com/Struis112/ClutterCutter).
 
 ---
 
