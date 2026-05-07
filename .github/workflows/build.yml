@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile with .NET Framework csc.exe
+        shell: pwsh
+        run: |
+          $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc" }
+          & $csc -nologo -target:winexe -optimize+ -platform:anycpu `
+            -reference:System.Windows.Forms.dll `
+            -reference:System.Drawing.dll `
+            -reference:System.dll `
+            -reference:System.Core.dll `
+            -reference:Microsoft.VisualBasic.dll `
+            -out:TreeSizeLite.exe `
+            TreeSizeLite.cs
+          if ($LASTEXITCODE -ne 0) { throw "csc.exe exited with $LASTEXITCODE" }
+          if (-not (Test-Path TreeSizeLite.exe)) { throw "TreeSizeLite.exe was not produced" }
+          $size = (Get-Item TreeSizeLite.exe).Length
+          Write-Host "Built TreeSizeLite.exe ($size bytes)"
+
+      - name: Smoke test (process starts)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath ".\TreeSizeLite.exe" -PassThru
+          Start-Sleep -Seconds 3
+          if ($p.HasExited) {
+            throw "TreeSizeLite.exe exited immediately with code $($p.ExitCode)"
+          }
+          Write-Host "Process running: PID=$($p.Id) Title='$($p.MainWindowTitle)'"
+          Stop-Process -Id $p.Id -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TreeSizeLite-${{ github.sha }}
+          path: TreeSizeLite.exe
+          retention-days: 30
+
+      - name: Attach to GitHub Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TreeSizeLite.exe
+          fail_on_unmatched_files: true

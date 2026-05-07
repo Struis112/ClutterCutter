@@ -1,0 +1,21 @@
+# Build artifacts
+*.exe
+*.pdb
+*.dll
+*.obj
+*.suo
+bin/
+obj/
+
+# Runtime files
+*.log
+theme.cfg
+
+# IDE
+.vs/
+.vscode/
+*.user
+
+# OS
+Thumbs.db
+.DS_Store
