@@ -1,10 +1,25 @@
 name: Build
 
+# Notes on triggers:
+#  - pull_request / push to main: regular CI checks for every change.
+#  - tags v*.*.*: tag pushes built by a human (or a PAT) trigger a build that attaches the exe.
+#  - release: created/published: covers the case where release-please publishes a Release using
+#    GITHUB_TOKEN — token-created tag pushes do NOT trigger workflows, but the 'release' event
+#    fires when the Release object itself is created, so we get a chance to attach the exe.
+#  - workflow_dispatch: lets us manually re-run for a given tag from the Actions tab.
 on:
   pull_request:
   push:
     branches: [main]
     tags: ['v*.*.*']
+  release:
+    types: [created, published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build & attach to its Release (e.g. v0.2.0). Leave blank to just build main.'
+        required: false
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -19,6 +34,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # For workflow_dispatch with a tag input, build that tag. Otherwise use the trigger ref.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.tag || github.ref }}
 
       - name: Compile with .NET Framework csc.exe
         shell: pwsh
@@ -57,9 +75,13 @@ jobs:
           path: ClutterCutter.exe
           retention-days: 30
 
-      - name: Attach to GitHub Release on tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Attach exe to GitHub Release
+        if: |
+          github.event_name == 'release' ||
+          (github.event_name == 'workflow_dispatch' && inputs.tag != '') ||
+          startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ClutterCutter.exe
           fail_on_unmatched_files: true
+          tag_name: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}

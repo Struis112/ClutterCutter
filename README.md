@@ -39,6 +39,12 @@ You only need a Windows machine. The .NET Framework 4 C# compiler ships with Win
 
 GitHub Actions reproduces this same build on every push (`.github/workflows/build.yml`).
 
+## Releasing
+
+Releases are managed by [release-please](https://github.com/googleapis/release-please). Conventional-commit messages on `main` keep an open "release PR" up to date with the next version + a generated changelog. Merging that PR creates the tag and the GitHub Release.
+
+Because tags created by `GITHUB_TOKEN` don't recursively trigger workflows, the **Build** workflow has a `workflow_dispatch` trigger so we can run it manually for a published tag — go to **Actions → Build → Run workflow**, enter the tag (e.g. `v0.2.0`), and the exe is built and attached to the matching Release. (For fully automated tag → exe upload, swap the release-please action's token for a PAT secret.)
+
 ## Keyboard shortcuts
 
 | Key             | Action                                  |
