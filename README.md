@@ -4,6 +4,10 @@ A lightweight Windows disk-usage browser built and maintained by **Struis ICT**.
 
 Single-file native `.exe` (~70 KB), no installer, no dependencies beyond the .NET Framework 4 runtime that already ships with every modern Windows.
 
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/struis112)
+
+If ClutterCutter saves you time hunting down what's eating your disk, consider [buying me a coffee ☕](https://buymeacoffee.com/struis112) — it keeps this and other Struis ICT tools coming.
+
 ## Features
 
 - **Drive picker** with live used/free bars — click any drive to scan it.
