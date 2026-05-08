@@ -1591,8 +1591,12 @@ namespace ClutterCutter
             miAbout.Click += new EventHandler(helpAbout_Click);
             ToolStripMenuItem miKeys = new ToolStripMenuItem("&Keyboard shortcuts");
             miKeys.Click += new EventHandler(helpKeys_Click);
+            ToolStripMenuItem miCoffee = new ToolStripMenuItem("Buy me a &coffee ☕");
+            miCoffee.Click += new EventHandler(helpCoffee_Click);
             helpMenu.DropDownItems.Add(miAbout);
             helpMenu.DropDownItems.Add(miKeys);
+            helpMenu.DropDownItems.Add(new ToolStripSeparator());
+            helpMenu.DropDownItems.Add(miCoffee);
             mainMenu.Items.Add(helpMenu);
 
             // Right-aligned brand: separator + clickable Struis ICT label that opens the About dialog.
@@ -1766,6 +1770,20 @@ namespace ClutterCutter
 
         void helpAbout_Click(object sender, EventArgs e) { ShowAboutDialog(); }
 
+        const string CoffeeUrl = "https://buymeacoffee.com/struis112";
+        void helpCoffee_Click(object sender, EventArgs e) { OpenUrl(CoffeeUrl); }
+        static void OpenUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo(url);
+                psi.UseShellExecute = true;
+                Process.Start(psi);
+            }
+            catch { }
+        }
+
         void themeAuto_Click(object sender, EventArgs e)  { SetThemeMode(ThemeMode.Auto); }
         void themeLight_Click(object sender, EventArgs e) { SetThemeMode(ThemeMode.Light); }
         void themeDark_Click(object sender, EventArgs e)  { SetThemeMode(ThemeMode.Dark); }
@@ -1895,7 +1913,9 @@ namespace ClutterCutter
                 dlg.MaximizeBox = false;
                 dlg.ShowIcon = false;
                 dlg.ShowInTaskbar = false;
-                dlg.ClientSize = new Size(520, 360);
+                dlg.ClientSize = new Size(520, 410);
+                dlg.BackColor = Theme.FormBg;
+                dlg.ForeColor = Theme.Text;
 
                 Label title = new Label();
                 title.Text = "ClutterCutter";
@@ -1932,6 +1952,24 @@ namespace ClutterCutter
                 tech.Size = new Size(480, 40);
                 tech.Location = new Point(22, 230);
 
+                Label support = new Label();
+                support.Text = "Enjoying ClutterCutter? You can support development:";
+                support.Font = new Font("Segoe UI", 9.5F);
+                support.ForeColor = Theme.SubText;
+                support.AutoSize = true;
+                support.Location = new Point(22, 280);
+
+                LinkLabel coffeeLink = new LinkLabel();
+                coffeeLink.Text = "☕  Buy me a coffee  →  buymeacoffee.com/struis112";
+                coffeeLink.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+                coffeeLink.LinkColor = Theme.Accent;
+                coffeeLink.ActiveLinkColor = Theme.Accent;
+                coffeeLink.VisitedLinkColor = Theme.Accent;
+                coffeeLink.LinkBehavior = LinkBehavior.HoverUnderline;
+                coffeeLink.AutoSize = true;
+                coffeeLink.Location = new Point(22, 305);
+                coffeeLink.Click += new EventHandler(delegate(object s, EventArgs ev) { OpenUrl(CoffeeUrl); });
+
                 Button ok = new Button();
                 ok.Text = "OK";
                 ok.DialogResult = DialogResult.OK;
@@ -1943,6 +1981,8 @@ namespace ClutterCutter
                 dlg.Controls.Add(tagline);
                 dlg.Controls.Add(disclaimer);
                 dlg.Controls.Add(tech);
+                dlg.Controls.Add(support);
+                dlg.Controls.Add(coffeeLink);
                 dlg.Controls.Add(ok);
                 dlg.AcceptButton = ok;
                 dlg.CancelButton = ok;
