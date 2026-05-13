@@ -38,7 +38,9 @@ jobs:
           # For workflow_dispatch with a tag input, build that tag. Otherwise use the trigger ref.
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.tag || github.ref }}
 
-      - name: Compile with .NET Framework csc.exe
+      # ---------- C# build (canonical, ships as ClutterCutter.exe) ----------
+
+      - name: Compile C# build with .NET Framework csc.exe
         shell: pwsh
         run: |
           $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
@@ -57,7 +59,7 @@ jobs:
           $size = (Get-Item ClutterCutter.exe).Length
           Write-Host "Built ClutterCutter.exe ($size bytes)"
 
-      - name: Smoke test (process starts)
+      - name: Smoke test C# build
         shell: pwsh
         run: |
           $p = Start-Process -FilePath ".\ClutterCutter.exe" -PassThru
@@ -65,23 +67,68 @@ jobs:
           if ($p.HasExited) {
             throw "ClutterCutter.exe exited immediately with code $($p.ExitCode)"
           }
-          Write-Host "Process running: PID=$($p.Id) Title='$($p.MainWindowTitle)'"
+          Write-Host "C# build running: PID=$($p.Id) Title='$($p.MainWindowTitle)'"
           Stop-Process -Id $p.Id -Force
+
+      # ---------- Rust port (ships alongside as ClutterCutter-rust.exe) ----------
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Compile Rust port
+        shell: pwsh
+        working-directory: rust
+        run: |
+          cargo build --release
+          if (-not (Test-Path target/release/cluttercutter.exe)) {
+            throw "cluttercutter.exe was not produced"
+          }
+          $size = (Get-Item target/release/cluttercutter.exe).Length
+          Write-Host "Built cluttercutter.exe ($size bytes)"
+
+      - name: Stage Rust artifact
+        shell: pwsh
+        run: |
+          # Rename so the release page shows the two builds side-by-side without
+          # a case-sensitivity collision between ClutterCutter.exe and cluttercutter.exe.
+          Copy-Item rust/target/release/cluttercutter.exe -Destination ClutterCutter-rust.exe -Force
+
+      - name: Smoke test Rust build
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath ".\ClutterCutter-rust.exe" -PassThru
+          Start-Sleep -Seconds 3
+          if ($p.HasExited) {
+            throw "ClutterCutter-rust.exe exited immediately with code $($p.ExitCode)"
+          }
+          Write-Host "Rust port running: PID=$($p.Id) Title='$($p.MainWindowTitle)'"
+          Stop-Process -Id $p.Id -Force
+
+      # ---------- Artifact + release upload ----------
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ClutterCutter-${{ github.sha }}
-          path: ClutterCutter.exe
+          path: |
+            ClutterCutter.exe
+            ClutterCutter-rust.exe
           retention-days: 30
 
-      - name: Attach exe to GitHub Release
+      - name: Attach exes to GitHub Release
         if: |
           github.event_name == 'release' ||
           (github.event_name == 'workflow_dispatch' && inputs.tag != '') ||
           startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ClutterCutter.exe
+          files: |
+            ClutterCutter.exe
+            ClutterCutter-rust.exe
           fail_on_unmatched_files: true
           tag_name: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
