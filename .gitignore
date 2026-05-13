@@ -4,8 +4,8 @@
 *.dll
 *.obj
 *.suo
-bin/
-obj/
+/bin/
+/obj/
 
 # Runtime files
 *.log
