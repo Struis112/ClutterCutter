@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/Struis112/ClutterCutter/compare/v0.2.1...v0.3.0) (2026-05-13)
+
+
+### Features
+
+* add Rust port of ClutterCutter (low-level Win32 base) ([#6](https://github.com/Struis112/ClutterCutter/issues/6)) ([948f14f](https://github.com/Struis112/ClutterCutter/commit/948f14f41ee52d07ae7104937c223075b0305d75))
+
+
+### Miscellaneous Chores
+
+* release 0.3.0 ([#8](https://github.com/Struis112/ClutterCutter/issues/8)) ([9925c15](https://github.com/Struis112/ClutterCutter/commit/9925c15d1a232d6bfe9dfd2f016ad79d1afd3a95))
+
 ## [0.2.1](https://github.com/Struis112/ClutterCutter/compare/v0.2.0...v0.2.1) (2026-05-08)
 
 
