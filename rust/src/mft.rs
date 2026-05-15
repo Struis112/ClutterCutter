@@ -5,7 +5,7 @@
 // reads metadata in one big sequential pass instead of per-folder syscalls.
 
 use crate::scanner::{wide, ProgressFn};
-use crate::types::{FolderNode, ScanProgress};
+use crate::types::{FileEntry, FolderNode, ScanProgress};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
@@ -29,6 +29,7 @@ const GENERIC_READ: u32 = 0x80000000;
 pub struct MftScanner {
     cancel: Arc<AtomicBool>,
     progress: Option<Arc<ProgressFn>>,
+    track_files: bool,
 
     files_scanned: AtomicI64,
     total_size: AtomicI64,
@@ -43,6 +44,7 @@ impl MftScanner {
         Self {
             cancel: Arc::new(AtomicBool::new(false)),
             progress: None,
+            track_files: false,
             files_scanned: AtomicI64::new(0),
             total_size: AtomicI64::new(0),
             last_report_ms: AtomicI64::new(0),
@@ -59,6 +61,11 @@ impl MftScanner {
 
     pub fn with_progress(mut self, p: ProgressFn) -> Self {
         self.progress = Some(Arc::new(p));
+        self
+    }
+
+    pub fn with_track_files(mut self, b: bool) -> Self {
+        self.track_files = b;
         self
     }
 
@@ -318,7 +325,7 @@ impl MftScanner {
         root_node.name = root_path.clone();
         root_node.last_modified_ft = entries[&5].last_write_ft;
 
-        build_subtree(5, &mut root_node, &root_path, &entries, &kids);
+        build_subtree(5, &mut root_node, &root_path, &entries, &kids, self.track_files);
         Ok(root_node)
     }
 
@@ -575,6 +582,7 @@ fn build_subtree(
     node_path: &str,
     entries: &HashMap<i64, MftEntry>,
     kids: &HashMap<i64, Vec<i64>>,
+    track_files: bool,
 ) {
     let kid_frns = match kids.get(&frn) {
         Some(v) => v,
@@ -595,7 +603,7 @@ fn build_subtree(
             child.full_path = child_path.clone();
             child.name = c.name.clone();
             child.last_modified_ft = c.last_write_ft;
-            build_subtree(child_frn, &mut child, &child_path, entries, kids);
+            build_subtree(child_frn, &mut child, &child_path, entries, kids, track_files);
             node.size += child.size;
             node.file_count += child.file_count;
             node.folder_count += child.folder_count + 1;
@@ -605,6 +613,13 @@ fn build_subtree(
             node.size += c.size;
             node.direct_file_count += 1;
             node.file_count += 1;
+            if track_files {
+                node.files.push(FileEntry {
+                    name: c.name.clone(),
+                    size: c.size,
+                    last_modified_ft: c.last_write_ft,
+                });
+            }
         }
     }
 }

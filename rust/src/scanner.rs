@@ -2,7 +2,7 @@
 // Direct port of the `Scanner` class in ClutterCutter.cs — same FindExInfoBasic +
 // LARGE_FETCH fast path, same parallel top-level fan-out, same progress throttling.
 
-use crate::types::{FolderNode, ScanProgress};
+use crate::types::{FileEntry, FolderNode, ScanProgress};
 use std::ffi::OsStr;
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
@@ -25,6 +25,7 @@ pub struct Scanner {
     progress: Option<Arc<ProgressFn>>,
     parallel_top_levels: i32,
     pub total_size_hint: i64,
+    track_files: bool,
 
     total_size: AtomicI64,
     files_scanned: AtomicI64,
@@ -39,6 +40,7 @@ impl Scanner {
             progress: None,
             parallel_top_levels: 2,
             total_size_hint: 0,
+            track_files: false,
             total_size: AtomicI64::new(0),
             files_scanned: AtomicI64::new(0),
             last_report_ms: AtomicI64::new(0),
@@ -53,6 +55,11 @@ impl Scanner {
 
     pub fn with_progress(mut self, p: ProgressFn) -> Self {
         self.progress = Some(Arc::new(p));
+        self
+    }
+
+    pub fn with_track_files(mut self, b: bool) -> Self {
+        self.track_files = b;
         self
     }
 
@@ -147,6 +154,15 @@ impl Scanner {
                     node.file_count += 1;
                     self.files_scanned.fetch_add(1, Ordering::Relaxed);
                     self.total_size.fetch_add(size, Ordering::Relaxed);
+                    if self.track_files {
+                        let mtime = ((fd.ftLastWriteTime.dwHighDateTime as i64) << 32)
+                            | (fd.ftLastWriteTime.dwLowDateTime as i64);
+                        node.files.push(FileEntry {
+                            name: name.clone(),
+                            size,
+                            last_modified_ft: mtime,
+                        });
+                    }
                 }
             }
             let next = unsafe { FindNextFileW(h, &mut fd as *mut _ as *mut _) };
