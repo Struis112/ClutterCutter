@@ -1,7 +1,7 @@
 // Console driver — invokes the scanner modules from the lib crate. Useful for
 // validating the scanners independently of the GUI.
 
-use cluttercutter::{mft, scanner, types};
+use cluttercutter::{analysis, mft, scanner, types};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,18 +9,29 @@ use std::time::Instant;
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut use_mft = false;
-    args.retain(|a| {
-        if a == "--mft" {
-            use_mft = true;
-            false
-        } else {
-            true
+    let mut top_n: usize = 0;
+    // Strip --mft and --top-n N out of args; remainder is the path.
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--mft" => {
+                use_mft = true;
+                args.remove(i);
+            }
+            "--top-n" => {
+                args.remove(i);
+                if i < args.len() {
+                    top_n = args.remove(i).parse().unwrap_or(0);
+                }
+            }
+            _ => i += 1,
         }
-    });
+    }
+    let track_files = top_n > 0;
     let root = match args.into_iter().next() {
         Some(p) => p,
         None => {
-            eprintln!("usage: cluttercutter-cli.exe [--mft] <path>");
+            eprintln!("usage: cluttercutter-cli.exe [--mft] [--top-n N] <path>");
             std::process::exit(2);
         }
     };
@@ -45,11 +56,13 @@ fn main() {
         mft::MftScanner::new()
             .with_cancel(cancel.clone())
             .with_progress(progress)
+            .with_track_files(track_files)
             .scan(&root)
     } else {
         scanner::Scanner::new()
             .with_cancel(cancel.clone())
             .with_progress(progress)
+            .with_track_files(track_files)
             .scan(&root)
             .map_err(|s| s.to_string())
     };
@@ -74,10 +87,23 @@ fn main() {
         if use_mft { "MFT" } else { "walker" },
     );
 
-    let mut kids: Vec<&types::FolderNode> = root.children.iter().collect();
-    kids.sort_by(|a, b| b.size.cmp(&a.size));
-    for k in kids.iter().take(20) {
-        println!("  {:>10}  {}", fmt_bytes(k.size), k.name);
+    if top_n > 0 {
+        println!("\nTop {top_n} largest files:");
+        let hits = analysis::top_n_files(&root, top_n);
+        for h in &hits {
+            let full = if h.folder.full_path.ends_with('\\') {
+                format!("{}{}", h.folder.full_path, h.file.name)
+            } else {
+                format!("{}\\{}", h.folder.full_path, h.file.name)
+            };
+            println!("  {:>10}  {}", fmt_bytes(h.file.size), full);
+        }
+    } else {
+        let mut kids: Vec<&types::FolderNode> = root.children.iter().collect();
+        kids.sort_by(|a, b| b.size.cmp(&a.size));
+        for k in kids.iter().take(20) {
+            println!("  {:>10}  {}", fmt_bytes(k.size), k.name);
+        }
     }
 }
 

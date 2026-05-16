@@ -12,6 +12,7 @@
 // menu; F5 re-scans, Esc stops, Backspace goes to parent, Enter drills, Del
 // recycles.
 
+use crate::analysis::top_n_files;
 use crate::mft::{is_ntfs_drive_root, MftScanner};
 use crate::scanner::{wide, wstr_to_string, ProgressFn, Scanner};
 use crate::types::{FolderNode, ScanProgress};
@@ -20,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows::core::{w, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{BOOL, FILETIME, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::Graphics::Gdi::{GetSysColorBrush, InvalidateRect, UpdateWindow, COLOR_BTNFACE};
 use windows::Win32::Storage::FileSystem::{
@@ -36,19 +37,20 @@ use windows::Win32::System::Registry::{
     RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
     REG_VALUE_TYPE,
 };
+use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES,
     ICC_STANDARD_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCFMT_RIGHT,
     LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS,
-    LVM_GETITEMW, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETBKCOLOR,
-    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW, LVM_SETTEXTBKCOLOR, LVM_SETTEXTCOLOR,
-    LVNI_SELECTED, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_EX_GRIDLINES, LVS_REPORT,
-    LVS_SHOWSELALWAYS, NMHDR, NMITEMACTIVATE, NM_DBLCLK, NM_RCLICK, SBARS_SIZEGRIP, SB_SETTEXTW,
-    TVE_EXPAND, TVGN_CARET, TVGN_PARENT, TVIF_CHILDREN, TVIF_PARAM, TVIF_TEXT, TVITEMW, TVI_ROOT,
-    TVM_DELETEITEM, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVM_SELECTITEM,
-    TVM_SETBKCOLOR, TVM_SETTEXTCOLOR, TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW, TVS_HASBUTTONS,
-    TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS, TVS_TRACKSELECT,
+    LVM_DELETECOLUMN, LVM_GETITEMW, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
+    LVM_SETBKCOLOR, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW, LVM_SETTEXTBKCOLOR,
+    LVM_SETTEXTCOLOR, LVNI_SELECTED, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_EX_GRIDLINES,
+    LVS_REPORT, LVS_SHOWSELALWAYS, NMHDR, NMITEMACTIVATE, NM_DBLCLK, NM_RCLICK, SBARS_SIZEGRIP,
+    SB_SETTEXTW, TVE_EXPAND, TVGN_CARET, TVGN_PARENT, TVIF_CHILDREN, TVIF_PARAM, TVIF_TEXT,
+    TVITEMW, TVI_ROOT, TVM_DELETEITEM, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_INSERTITEMW,
+    TVM_SELECTITEM, TVM_SETBKCOLOR, TVM_SETTEXTCOLOR, TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW,
+    TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS, TVS_TRACKSELECT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::Shell::{
@@ -96,6 +98,15 @@ const ID_MENU_THEME_AUTO: u16 = 5101;
 const ID_MENU_THEME_LIGHT: u16 = 5102;
 const ID_MENU_THEME_DARK: u16 = 5103;
 const ID_MENU_ABOUT: u16 = 5200;
+const ID_MENU_VIEW_TREE: u16 = 5301;
+const ID_MENU_VIEW_TOPFILES: u16 = 5302;
+
+// Listview column counts per view-mode (used to wipe and rebuild columns).
+const TREE_VIEW_COLUMNS: i32 = 4;
+const TOP_FILES_VIEW_COLUMNS: i32 = 4;
+
+// Number of files shown in the "Top largest files" view.
+const TOP_N_FILES: usize = 100;
 
 // Custom messages
 const WM_APP_PROGRESS: u32 = WM_APP + 1;
@@ -136,6 +147,13 @@ enum ThemeMode {
     Dark,
 }
 
+#[derive(Copy, Clone, Default, PartialEq)]
+enum ViewMode {
+    #[default]
+    FolderTree,
+    TopFiles,
+}
+
 struct AppState {
     drives: Vec<DriveInfo>,
     drive_buttons: Vec<HWND>,
@@ -164,6 +182,7 @@ struct AppState {
     theme_mode: ThemeMode,
     is_dark: bool,
     menu: HMENU,
+    view_mode: ViewMode,
 }
 
 #[derive(Copy, Clone)]
@@ -227,6 +246,7 @@ pub fn run() {
             theme_mode: ThemeMode::Auto,
             is_dark: false,
             menu: HMENU::default(),
+            view_mode: ViewMode::FolderTree,
         });
         let app_ptr = Box::into_raw(app);
 
@@ -352,6 +372,8 @@ unsafe fn on_command(hwnd: HWND, app: &mut AppState, id: u16) {
         ID_MENU_THEME_AUTO => apply_theme(hwnd, app, ThemeMode::Auto),
         ID_MENU_THEME_LIGHT => apply_theme(hwnd, app, ThemeMode::Light),
         ID_MENU_THEME_DARK => apply_theme(hwnd, app, ThemeMode::Dark),
+        ID_MENU_VIEW_TREE => apply_view_mode(app, ViewMode::FolderTree),
+        ID_MENU_VIEW_TOPFILES => apply_view_mode(app, ViewMode::TopFiles),
         ID_MENU_REFRESH | ID_ACC_REFRESH => {
             if !app.scanning {
                 if let Some((path, use_mft)) = app.last_scan.clone() {
@@ -634,11 +656,19 @@ unsafe fn build_menu_bar(hwnd: HWND, app: &mut AppState) {
     let _ = AppendMenuW(menu, MF_POPUP, file_pop.0 as usize, w!("&File"));
 
     let view_pop = CreatePopupMenu().expect("CreatePopupMenu view");
+    let _ = AppendMenuW(view_pop, MF_STRING, ID_MENU_VIEW_TREE as usize, w!("&Folder tree"));
+    let _ = AppendMenuW(
+        view_pop,
+        MF_STRING,
+        ID_MENU_VIEW_TOPFILES as usize,
+        w!("&Top largest files"),
+    );
+    let _ = AppendMenuW(view_pop, MF_SEPARATOR, 0, PCWSTR::null());
     let theme_pop = CreatePopupMenu().expect("CreatePopupMenu theme");
     let _ = AppendMenuW(theme_pop, MF_STRING, ID_MENU_THEME_AUTO as usize, w!("&Auto (system)"));
     let _ = AppendMenuW(theme_pop, MF_STRING, ID_MENU_THEME_LIGHT as usize, w!("&Light"));
     let _ = AppendMenuW(theme_pop, MF_STRING, ID_MENU_THEME_DARK as usize, w!("&Dark"));
-    let _ = AppendMenuW(view_pop, MF_POPUP, theme_pop.0 as usize, w!("&Theme"));
+    let _ = AppendMenuW(view_pop, MF_POPUP, theme_pop.0 as usize, w!("T&heme"));
     let _ = AppendMenuW(menu, MF_POPUP, view_pop.0 as usize, w!("&View"));
 
     let help_pop = CreatePopupMenu().expect("CreatePopupMenu help");
@@ -649,12 +679,19 @@ unsafe fn build_menu_bar(hwnd: HWND, app: &mut AppState) {
     let _ = DrawMenuBar(hwnd);
     app.menu = menu;
 
-    // Initially check Auto theme.
+    // Initially check Auto theme + FolderTree view.
     let _ = CheckMenuRadioItem(
         menu,
         ID_MENU_THEME_AUTO as u32,
         ID_MENU_THEME_DARK as u32,
         ID_MENU_THEME_AUTO as u32,
+        MF_BYCOMMAND.0,
+    );
+    let _ = CheckMenuRadioItem(
+        menu,
+        ID_MENU_VIEW_TREE as u32,
+        ID_MENU_VIEW_TOPFILES as u32,
+        ID_MENU_VIEW_TREE as u32,
         MF_BYCOMMAND.0,
     );
 }
@@ -716,11 +753,13 @@ unsafe fn start_scan(hwnd: HWND, app: &mut AppState, path: String, use_mft: bool
             MftScanner::new()
                 .with_cancel(cancel)
                 .with_progress(progress)
+                .with_track_files(true)
                 .scan(&path)
         } else {
             Scanner::new()
                 .with_cancel(cancel)
                 .with_progress(progress)
+                .with_track_files(true)
                 .scan(&path)
                 .map_err(|e| e.to_string())
         };
@@ -798,6 +837,12 @@ unsafe fn on_scan_done(app: &mut AppState) {
         app.item_by_node.insert(root_ptr as isize, hti);
         populate_children(app, hti, root);
         SendMessageW(app.tree, TVM_SELECTITEM, WPARAM(TVGN_CARET as usize), LPARAM(hti));
+    }
+    // The tree-selection above repopulates the listview for the FolderTree view.
+    // In TopFiles mode the tree selection is irrelevant; populate the global
+    // top-N over the new scan result directly.
+    if app.view_mode == ViewMode::TopFiles {
+        populate_list_top_files(app);
     }
 
     set_status(app.status, &summary);
@@ -882,6 +927,17 @@ unsafe fn on_tree_select(app: &mut AppState) {
 }
 
 unsafe fn populate_list(app: &AppState, node: &FolderNode) {
+    match app.view_mode {
+        ViewMode::FolderTree => populate_list_folders(app, node),
+        ViewMode::TopFiles => {
+            // Top Files view ignores the tree selection — it always shows the global
+            // top-N over the entire scan. Repopulating on selection-change would be
+            // wasteful, so we just leave the list as-is.
+        }
+    }
+}
+
+unsafe fn populate_list_folders(app: &AppState, node: &FolderNode) {
     SendMessageW(app.list, LVM_DELETEALLITEMS, WPARAM(0), LPARAM(0));
     let mut kids: Vec<&FolderNode> = node.children.iter().collect();
     kids.sort_by(|a, b| b.size.cmp(&a.size));
@@ -898,6 +954,114 @@ unsafe fn populate_list(app: &AppState, node: &FolderNode) {
             *k as *const _ as isize,
         );
     }
+}
+
+unsafe fn populate_list_top_files(app: &AppState) {
+    SendMessageW(app.list, LVM_DELETEALLITEMS, WPARAM(0), LPARAM(0));
+    let root_ptr = match app.root_node.as_deref() {
+        Some(r) => r as *const FolderNode,
+        None => return,
+    };
+    let root: &FolderNode = &*root_ptr;
+    let hits = top_n_files(root, TOP_N_FILES);
+    for (i, h) in hits.iter().enumerate() {
+        let full_path = if h.folder.full_path.ends_with('\\') {
+            format!("{}{}", h.folder.full_path, h.file.name)
+        } else {
+            format!("{}\\{}", h.folder.full_path, h.file.name)
+        };
+        insert_row_with_param(
+            app.list,
+            i as i32,
+            &h.file.name,
+            &[
+                format_bytes(h.file.size),
+                format_filetime(h.file.last_modified_ft),
+                full_path,
+            ],
+            0, // No FolderNode ptr for files; double-click navigation is folder-only
+        );
+    }
+}
+
+unsafe fn apply_view_mode(app: &mut AppState, mode: ViewMode) {
+    if app.view_mode == mode {
+        return;
+    }
+    app.view_mode = mode;
+
+    // Rebuild columns for the new view.
+    let prev_count = match mode {
+        ViewMode::FolderTree => TOP_FILES_VIEW_COLUMNS,
+        ViewMode::TopFiles => TREE_VIEW_COLUMNS,
+    };
+    for _ in 0..prev_count {
+        SendMessageW(app.list, LVM_DELETECOLUMN, WPARAM(0), LPARAM(0));
+    }
+    SendMessageW(app.list, LVM_DELETEALLITEMS, WPARAM(0), LPARAM(0));
+
+    match mode {
+        ViewMode::FolderTree => {
+            insert_column(app.list, 0, "Name", 320, false);
+            insert_column(app.list, 1, "Size", 130, true);
+            insert_column(app.list, 2, "Files", 100, true);
+            insert_column(app.list, 3, "Folders", 100, true);
+            // Repopulate from current tree selection (or root).
+            if let Some(root) = app.root_node.as_deref() {
+                let sel_ptr = if app.selected_node != 0 {
+                    app.selected_node as *const FolderNode
+                } else {
+                    root as *const FolderNode
+                };
+                populate_list_folders(app, &*sel_ptr);
+            }
+        }
+        ViewMode::TopFiles => {
+            insert_column(app.list, 0, "Name", 280, false);
+            insert_column(app.list, 1, "Size", 110, true);
+            insert_column(app.list, 2, "Modified", 130, false);
+            insert_column(app.list, 3, "Path", 600, false);
+            populate_list_top_files(app);
+        }
+    }
+
+    if !app.menu.is_invalid() {
+        let id = match mode {
+            ViewMode::FolderTree => ID_MENU_VIEW_TREE,
+            ViewMode::TopFiles => ID_MENU_VIEW_TOPFILES,
+        } as u32;
+        let _ = CheckMenuRadioItem(
+            app.menu,
+            ID_MENU_VIEW_TREE as u32,
+            ID_MENU_VIEW_TOPFILES as u32,
+            id,
+            MF_BYCOMMAND.0,
+        );
+    }
+}
+
+fn format_filetime(raw: i64) -> String {
+    if raw == 0 {
+        return String::new();
+    }
+    let ft = FILETIME {
+        dwLowDateTime: raw as u32,
+        dwHighDateTime: (raw >> 32) as u32,
+    };
+    let mut utc = SYSTEMTIME::default();
+    let mut local = SYSTEMTIME::default();
+    unsafe {
+        if FileTimeToSystemTime(&ft, &mut utc).is_err() {
+            return String::new();
+        }
+        if SystemTimeToTzSpecificLocalTime(None, &utc, &mut local).is_err() {
+            return String::new();
+        }
+    }
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute
+    )
 }
 
 unsafe fn tree_item_lparam(tree: HWND, hti: isize) -> isize {
