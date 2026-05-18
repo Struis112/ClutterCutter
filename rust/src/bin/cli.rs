@@ -10,7 +10,8 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut use_mft = false;
     let mut top_n: usize = 0;
-    // Strip --mft and --top-n N out of args; remainder is the path.
+    let mut oldest_n: usize = 0;
+    // Strip --mft / --top-n N / --oldest-n N; remainder is the path.
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -24,14 +25,20 @@ fn main() {
                     top_n = args.remove(i).parse().unwrap_or(0);
                 }
             }
+            "--oldest-n" => {
+                args.remove(i);
+                if i < args.len() {
+                    oldest_n = args.remove(i).parse().unwrap_or(0);
+                }
+            }
             _ => i += 1,
         }
     }
-    let track_files = top_n > 0;
+    let track_files = top_n > 0 || oldest_n > 0;
     let root = match args.into_iter().next() {
         Some(p) => p,
         None => {
-            eprintln!("usage: cluttercutter-cli.exe [--mft] [--top-n N] <path>");
+            eprintln!("usage: cluttercutter-cli.exe [--mft] [--top-n N] [--oldest-n N] <path>");
             std::process::exit(2);
         }
     };
@@ -87,24 +94,60 @@ fn main() {
         if use_mft { "MFT" } else { "walker" },
     );
 
+    let printed_special = top_n > 0 || oldest_n > 0;
     if top_n > 0 {
         println!("\nTop {top_n} largest files:");
         let hits = analysis::top_n_files(&root, top_n);
         for h in &hits {
-            let full = if h.folder.full_path.ends_with('\\') {
-                format!("{}{}", h.folder.full_path, h.file.name)
-            } else {
-                format!("{}\\{}", h.folder.full_path, h.file.name)
-            };
+            let full = full_path(h);
             println!("  {:>10}  {}", fmt_bytes(h.file.size), full);
         }
-    } else {
+    }
+    if oldest_n > 0 {
+        println!("\nOldest {oldest_n} files (by last-modified):");
+        let hits = analysis::oldest_n_files(&root, oldest_n);
+        for h in &hits {
+            let full = full_path(h);
+            let date = format_short_date(h.file.last_modified_ft);
+            println!("  {date}  {:>10}  {full}", fmt_bytes(h.file.size));
+        }
+    }
+    if !printed_special {
         let mut kids: Vec<&types::FolderNode> = root.children.iter().collect();
         kids.sort_by(|a, b| b.size.cmp(&a.size));
         for k in kids.iter().take(20) {
             println!("  {:>10}  {}", fmt_bytes(k.size), k.name);
         }
     }
+}
+
+fn full_path(h: &analysis::FileHit<'_>) -> String {
+    if h.folder.full_path.ends_with('\\') {
+        format!("{}{}", h.folder.full_path, h.file.name)
+    } else {
+        format!("{}\\{}", h.folder.full_path, h.file.name)
+    }
+}
+
+// Quick yyyy-mm-dd formatter via Win32 FILETIME→SYSTEMTIME (UTC, no TZ shift —
+// good enough for a CLI debug view).
+fn format_short_date(raw: i64) -> String {
+    if raw == 0 {
+        return "          ".into();
+    }
+    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows::Win32::System::Time::FileTimeToSystemTime;
+    let ft = FILETIME {
+        dwLowDateTime: raw as u32,
+        dwHighDateTime: (raw >> 32) as u32,
+    };
+    let mut st = SYSTEMTIME::default();
+    unsafe {
+        if FileTimeToSystemTime(&ft, &mut st).is_err() {
+            return "          ".into();
+        }
+    }
+    format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay)
 }
 
 fn fmt_bytes(n: i64) -> String {

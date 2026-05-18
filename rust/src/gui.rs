@@ -12,7 +12,7 @@
 // menu; F5 re-scans, Esc stops, Backspace goes to parent, Enter drills, Del
 // recycles.
 
-use crate::analysis::top_n_files;
+use crate::analysis::{oldest_n_files, top_n_files};
 use crate::mft::{is_ntfs_drive_root, MftScanner};
 use crate::scanner::{wide, wstr_to_string, ProgressFn, Scanner};
 use crate::types::{FolderNode, ScanProgress};
@@ -100,12 +100,13 @@ const ID_MENU_THEME_DARK: u16 = 5103;
 const ID_MENU_ABOUT: u16 = 5200;
 const ID_MENU_VIEW_TREE: u16 = 5301;
 const ID_MENU_VIEW_TOPFILES: u16 = 5302;
+const ID_MENU_VIEW_OLDEST: u16 = 5303;
 
-// Listview column counts per view-mode (used to wipe and rebuild columns).
-const TREE_VIEW_COLUMNS: i32 = 4;
-const TOP_FILES_VIEW_COLUMNS: i32 = 4;
+// All three views happen to have 4 listview columns; kept as a single constant
+// to drive the column-rebuild on view switch.
+const VIEW_COLUMN_COUNT: i32 = 4;
 
-// Number of files shown in the "Top largest files" view.
+// Number of files shown in the file-based views (top largest / oldest).
 const TOP_N_FILES: usize = 100;
 
 // Custom messages
@@ -152,6 +153,7 @@ enum ViewMode {
     #[default]
     FolderTree,
     TopFiles,
+    OldestFiles,
 }
 
 struct AppState {
@@ -374,6 +376,7 @@ unsafe fn on_command(hwnd: HWND, app: &mut AppState, id: u16) {
         ID_MENU_THEME_DARK => apply_theme(hwnd, app, ThemeMode::Dark),
         ID_MENU_VIEW_TREE => apply_view_mode(app, ViewMode::FolderTree),
         ID_MENU_VIEW_TOPFILES => apply_view_mode(app, ViewMode::TopFiles),
+        ID_MENU_VIEW_OLDEST => apply_view_mode(app, ViewMode::OldestFiles),
         ID_MENU_REFRESH | ID_ACC_REFRESH => {
             if !app.scanning {
                 if let Some((path, use_mft)) = app.last_scan.clone() {
@@ -663,6 +666,12 @@ unsafe fn build_menu_bar(hwnd: HWND, app: &mut AppState) {
         ID_MENU_VIEW_TOPFILES as usize,
         w!("&Top largest files"),
     );
+    let _ = AppendMenuW(
+        view_pop,
+        MF_STRING,
+        ID_MENU_VIEW_OLDEST as usize,
+        w!("&Oldest files (by date modified)"),
+    );
     let _ = AppendMenuW(view_pop, MF_SEPARATOR, 0, PCWSTR::null());
     let theme_pop = CreatePopupMenu().expect("CreatePopupMenu theme");
     let _ = AppendMenuW(theme_pop, MF_STRING, ID_MENU_THEME_AUTO as usize, w!("&Auto (system)"));
@@ -690,7 +699,7 @@ unsafe fn build_menu_bar(hwnd: HWND, app: &mut AppState) {
     let _ = CheckMenuRadioItem(
         menu,
         ID_MENU_VIEW_TREE as u32,
-        ID_MENU_VIEW_TOPFILES as u32,
+        ID_MENU_VIEW_OLDEST as u32,
         ID_MENU_VIEW_TREE as u32,
         MF_BYCOMMAND.0,
     );
@@ -839,10 +848,11 @@ unsafe fn on_scan_done(app: &mut AppState) {
         SendMessageW(app.tree, TVM_SELECTITEM, WPARAM(TVGN_CARET as usize), LPARAM(hti));
     }
     // The tree-selection above repopulates the listview for the FolderTree view.
-    // In TopFiles mode the tree selection is irrelevant; populate the global
-    // top-N over the new scan result directly.
-    if app.view_mode == ViewMode::TopFiles {
-        populate_list_top_files(app);
+    // File-based views ignore tree selection; populate the global ranking directly.
+    match app.view_mode {
+        ViewMode::FolderTree => {}
+        ViewMode::TopFiles => populate_list_top_files(app),
+        ViewMode::OldestFiles => populate_list_oldest_files(app),
     }
 
     set_status(app.status, &summary);
@@ -929,10 +939,9 @@ unsafe fn on_tree_select(app: &mut AppState) {
 unsafe fn populate_list(app: &AppState, node: &FolderNode) {
     match app.view_mode {
         ViewMode::FolderTree => populate_list_folders(app, node),
-        ViewMode::TopFiles => {
-            // Top Files view ignores the tree selection — it always shows the global
-            // top-N over the entire scan. Repopulating on selection-change would be
-            // wasteful, so we just leave the list as-is.
+        ViewMode::TopFiles | ViewMode::OldestFiles => {
+            // File-based views ignore tree selection — they show a global ranking
+            // over the entire scan. Repopulating on selection-change is wasteful.
         }
     }
 }
@@ -957,13 +966,24 @@ unsafe fn populate_list_folders(app: &AppState, node: &FolderNode) {
 }
 
 unsafe fn populate_list_top_files(app: &AppState) {
+    populate_list_from_hits(app, |root| top_n_files(root, TOP_N_FILES));
+}
+
+unsafe fn populate_list_oldest_files(app: &AppState) {
+    populate_list_from_hits(app, |root| oldest_n_files(root, TOP_N_FILES));
+}
+
+unsafe fn populate_list_from_hits<F>(app: &AppState, query: F)
+where
+    F: for<'a> FnOnce(&'a FolderNode) -> Vec<crate::analysis::FileHit<'a>>,
+{
     SendMessageW(app.list, LVM_DELETEALLITEMS, WPARAM(0), LPARAM(0));
     let root_ptr = match app.root_node.as_deref() {
         Some(r) => r as *const FolderNode,
         None => return,
     };
     let root: &FolderNode = &*root_ptr;
-    let hits = top_n_files(root, TOP_N_FILES);
+    let hits = query(root);
     for (i, h) in hits.iter().enumerate() {
         let full_path = if h.folder.full_path.ends_with('\\') {
             format!("{}{}", h.folder.full_path, h.file.name)
@@ -990,12 +1010,7 @@ unsafe fn apply_view_mode(app: &mut AppState, mode: ViewMode) {
     }
     app.view_mode = mode;
 
-    // Rebuild columns for the new view.
-    let prev_count = match mode {
-        ViewMode::FolderTree => TOP_FILES_VIEW_COLUMNS,
-        ViewMode::TopFiles => TREE_VIEW_COLUMNS,
-    };
-    for _ in 0..prev_count {
+    for _ in 0..VIEW_COLUMN_COUNT {
         SendMessageW(app.list, LVM_DELETECOLUMN, WPARAM(0), LPARAM(0));
     }
     SendMessageW(app.list, LVM_DELETEALLITEMS, WPARAM(0), LPARAM(0));
@@ -1006,7 +1021,6 @@ unsafe fn apply_view_mode(app: &mut AppState, mode: ViewMode) {
             insert_column(app.list, 1, "Size", 130, true);
             insert_column(app.list, 2, "Files", 100, true);
             insert_column(app.list, 3, "Folders", 100, true);
-            // Repopulate from current tree selection (or root).
             if let Some(root) = app.root_node.as_deref() {
                 let sel_ptr = if app.selected_node != 0 {
                     app.selected_node as *const FolderNode
@@ -1023,17 +1037,25 @@ unsafe fn apply_view_mode(app: &mut AppState, mode: ViewMode) {
             insert_column(app.list, 3, "Path", 600, false);
             populate_list_top_files(app);
         }
+        ViewMode::OldestFiles => {
+            insert_column(app.list, 0, "Name", 280, false);
+            insert_column(app.list, 1, "Size", 110, true);
+            insert_column(app.list, 2, "Modified", 130, false);
+            insert_column(app.list, 3, "Path", 600, false);
+            populate_list_oldest_files(app);
+        }
     }
 
     if !app.menu.is_invalid() {
         let id = match mode {
             ViewMode::FolderTree => ID_MENU_VIEW_TREE,
             ViewMode::TopFiles => ID_MENU_VIEW_TOPFILES,
+            ViewMode::OldestFiles => ID_MENU_VIEW_OLDEST,
         } as u32;
         let _ = CheckMenuRadioItem(
             app.menu,
             ID_MENU_VIEW_TREE as u32,
-            ID_MENU_VIEW_TOPFILES as u32,
+            ID_MENU_VIEW_OLDEST as u32,
             id,
             MF_BYCOMMAND.0,
         );
