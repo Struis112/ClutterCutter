@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/Struis112/ClutterCutter/compare/v0.3.0...v0.3.1) (2026-05-18)
+
+
+### Features
+
+* oldest-files view in the Rust port ([#12](https://github.com/Struis112/ClutterCutter/issues/12)) ([9a5a41f](https://github.com/Struis112/ClutterCutter/commit/9a5a41f9f26ecab281158c174ad09b0daf15b82a))
+* top-N largest files view in the Rust port ([#10](https://github.com/Struis112/ClutterCutter/issues/10)) ([6b0f914](https://github.com/Struis112/ClutterCutter/commit/6b0f914a34a8ea2df53a7138304d07e01ed059ff))
+
 ## [0.3.0](https://github.com/Struis112/ClutterCutter/compare/v0.2.1...v0.3.0) (2026-05-13)
 
 
